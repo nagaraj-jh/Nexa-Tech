@@ -5,6 +5,7 @@ const pool = require('./db');
 const promptRoutes = require('./routes/prompts');
 const testCaseRoutes = require('./routes/testCases');
 const testExecutionRoutes = require('./routes/testExecutions');
+const authRoutes = require('./routes/auth');
 
 require('dotenv').config();
 
@@ -15,6 +16,7 @@ app.use(express.json());
 app.use('/api/prompts', promptRoutes);
 app.use('/api/test-cases', testCaseRoutes);
 app.use('/api/test-executions', testExecutionRoutes);
+app.use('/api/auth', authRoutes);
 
 // Welcome route
 app.get('/', (req, res) => {

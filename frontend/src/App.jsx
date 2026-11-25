@@ -1,5 +1,9 @@
+
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
+import './Auth.css'
+import Login from './Login'
+import Register from './Register'
 import TestCases from './TestCases'
 import TestExecution from './TestExecution'
 
@@ -14,7 +18,12 @@ const MENU = [
 ]
 
 // Dashboard component
-function Dashboard({ prompts, totalVersions, setPage }) {
+function Dashboard({
+  prompts,
+  totalVersions,
+  totalTestCases,
+  setPage,
+}) {
   return (
     <>
       <section className="welcome">
@@ -48,7 +57,7 @@ function Dashboard({ prompts, totalVersions, setPage }) {
 
         <div className="stat-card">
           <span>Test Cases</span>
-          <h2>0</h2>
+          <h2>{totalTestCases}</h2>
         </div>
 
         <div className="stat-card">
@@ -236,7 +245,10 @@ function PromptManagement({
                 </div>
 
                 {prompt.versions.map((version) => (
-                  <div className="version-item" key={version.version}>
+                  <div
+                    className="version-item"
+                    key={version.version}
+                  >
                     <h4>Version {version.version}</h4>
                     <p>{version.content}</p>
                     <small>Created: {version.createdAt}</small>
@@ -252,11 +264,32 @@ function PromptManagement({
 }
 
 // Main App component
-function App() {
+function AppContent() {
+  const [auth, setAuth] = useState(() => {
+    try {
+      const token = sessionStorage.getItem('nexa_token')
+      const user = sessionStorage.getItem('nexa_user')
+
+      if (token && user) {
+        return { token, user: JSON.parse(user) }
+      }
+    } catch (error) {
+      console.error('Session restore error:', error)
+      sessionStorage.removeItem('nexa_token')
+      sessionStorage.removeItem('nexa_user')
+    }
+
+    return null
+  })
+
+  const [authPage, setAuthPage] = useState('login')
+
   const [page, setPage] = useState('Dashboard')
   const [apiStatus, setApiStatus] = useState('connecting')
 
   const [prompts, setPrompts] = useState([])
+  const [totalTestCases, setTotalTestCases] = useState(0)
+
   const [name, setName] = useState('')
   const [content, setContent] = useState('')
   const [search, setSearch] = useState('')
@@ -264,9 +297,46 @@ function App() {
   const [message, setMessage] = useState('')
   const [isSaving, setIsSaving] = useState(false)
 
-  // Load prompts from PostgreSQL through the backend
+  // Save successful login details
+  function handleLogin(data) {
+    sessionStorage.setItem('nexa_token', data.token)
+    sessionStorage.setItem('nexa_user', JSON.stringify(data.user))
+
+    setAuth({
+      token: data.token,
+      user: data.user,
+    })
+
+    setPage('Dashboard')
+    setAuthPage('login')
+    setMessage('')
+  }
+
+  // Logout
+  function handleLogout() {
+    sessionStorage.removeItem('nexa_token')
+    sessionStorage.removeItem('nexa_user')
+
+    setAuth(null)
+    setPrompts([])
+    setTotalTestCases(0)
+    setName('')
+    setContent('')
+    setSearch('')
+    setSelectedPrompt(null)
+    setMessage('')
+    setPage('Dashboard')
+    setApiStatus('connecting')
+    setAuthPage('login')
+  }
+
+  // Load prompts from PostgreSQL
   async function fetchPrompts() {
-    const response = await fetch(`${API_URL}/prompts`)
+    const response = await fetch(`${API_URL}/prompts`, {
+      headers: {
+        Authorization: `Bearer ${auth.token}`,
+      },
+    })
 
     if (!response.ok) {
       throw new Error('Could not load prompts')
@@ -281,12 +351,18 @@ function App() {
     setPrompts(data.prompts || [])
   }
 
-  // Check backend and load saved prompts
+  // Check backend and load saved prompts after login
   useEffect(() => {
+    if (!auth) return
+
     const controller = new AbortController()
 
     async function initializeApp() {
       try {
+        const headers = {
+          Authorization: `Bearer ${auth.token}`,
+        }
+
         const healthResponse = await fetch(`${API_URL}/health`, {
           signal: controller.signal,
         })
@@ -304,6 +380,7 @@ function App() {
         setApiStatus('connected')
 
         const promptResponse = await fetch(`${API_URL}/prompts`, {
+          headers,
           signal: controller.signal,
         })
 
@@ -322,7 +399,9 @@ function App() {
         if (error.name !== 'AbortError') {
           console.error('Initialization error:', error)
           setApiStatus('error')
-          setMessage('Unable to connect to the backend or load prompts.')
+          setMessage(
+            'Unable to connect to the backend or load prompts.'
+          )
         }
       }
     }
@@ -330,7 +409,51 @@ function App() {
     initializeApp()
 
     return () => controller.abort()
-  }, [])
+  }, [auth])
+
+  // Fetch test case count whenever Dashboard opens
+  useEffect(() => {
+    if (!auth || page !== 'Dashboard') return
+
+    const controller = new AbortController()
+
+    async function loadTestCaseCount() {
+      try {
+        const response = await fetch(`${API_URL}/test-cases`, {
+          headers: {
+            Authorization: `Bearer ${auth.token}`,
+          },
+          signal: controller.signal,
+        })
+
+        if (!response.ok) {
+          throw new Error('Could not load test cases')
+        }
+
+        const data = await response.json()
+
+        if (!data.success) {
+          throw new Error(
+            data.message || 'Could not load test cases'
+          )
+        }
+
+        setTotalTestCases(
+          Array.isArray(data.testCases)
+            ? data.testCases.length
+            : 0
+        )
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('Test case count error:', error)
+        }
+      }
+    }
+
+    loadTestCaseCount()
+
+    return () => controller.abort()
+  }, [page, auth])
 
   // Filter prompts
   const filteredPrompts = useMemo(() => {
@@ -350,7 +473,9 @@ function App() {
     event.preventDefault()
 
     if (!name.trim() || !content.trim()) {
-      setMessage('Please enter both prompt name and instructions.')
+      setMessage(
+        'Please enter both prompt name and instructions.'
+      )
       return
     }
 
@@ -365,14 +490,17 @@ function App() {
 
       let response
 
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${auth.token}`,
+      }
+
       if (existingPrompt) {
         response = await fetch(
           `${API_URL}/prompts/${existingPrompt.id}/versions`,
           {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers,
             body: JSON.stringify({
               content: content.trim(),
             }),
@@ -381,9 +509,7 @@ function App() {
       } else {
         response = await fetch(`${API_URL}/prompts`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers,
           body: JSON.stringify({
             name: name.trim(),
             content: content.trim(),
@@ -410,7 +536,9 @@ function App() {
       setSelectedPrompt(null)
     } catch (error) {
       console.error('Save prompt error:', error)
-      setMessage(error.message || 'Failed to save prompt. Please try again.')
+      setMessage(
+        error.message || 'Failed to save prompt. Please try again.'
+      )
     } finally {
       setIsSaving(false)
     }
@@ -419,9 +547,13 @@ function App() {
   // Load a previous prompt into the editor
   function loadPrompt(prompt) {
     setName(prompt.name)
-    setContent(prompt.versions[prompt.versions.length - 1].content)
+    setContent(
+      prompt.versions[prompt.versions.length - 1].content
+    )
     setSelectedPrompt(prompt.id)
-    setMessage('Edit the content and save to create a new version.')
+    setMessage(
+      'Edit the content and save to create a new version.'
+    )
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -436,6 +568,9 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/prompts/${id}`, {
         method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+        },
       })
 
       const data = await response.json()
@@ -467,6 +602,25 @@ function App() {
     setMessage('')
   }
 
+  // Show Login or Register before authentication
+  if (!auth) {
+    if (authPage === 'register') {
+      return (
+        <Register
+          onRegister={() => setAuthPage('login')}
+          onShowLogin={() => setAuthPage('login')}
+        />
+      )
+    }
+
+    return (
+      <Login
+        onLogin={handleLogin}
+        onShowRegister={() => setAuthPage('register')}
+      />
+    )
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -478,7 +632,9 @@ function App() {
           {MENU.map((item) => (
             <button
               key={item}
-              className={`nav-link ${page === item ? 'active' : ''}`}
+              className={`nav-link ${
+                page === item ? 'active' : ''
+              }`}
               onClick={() => setPage(item)}
             >
               {item === 'Dashboard' && '▦'}
@@ -517,12 +673,26 @@ function App() {
                 ? 'Connecting...'
                 : 'Backend Disconnected'}
           </div>
+
+          <div className="user-header">
+            <span className="user-name">
+              {auth.user.name}
+            </span>
+
+            <button
+              className="logout-button"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
+          </div>
         </header>
 
         {page === 'Dashboard' && (
           <Dashboard
             prompts={prompts}
             totalVersions={totalVersions}
+            totalTestCases={totalTestCases}
             setPage={setPage}
           />
         )}
@@ -546,27 +716,31 @@ function App() {
           />
         )}
 
- 
-{page === 'Test Cases' && (
-  <TestCases prompts={prompts} />
-)}
+        {page === 'Test Cases' && (
+          <TestCases prompts={prompts} />
+        )}
 
-{page === 'Test Execution' && (
-  <TestExecution prompts={prompts} />
-)}
+        {page === 'Test Execution' && (
+          <TestExecution prompts={prompts} />
+        )}
 
-{page === 'Results & Reports' && (
-  <section className="content-card coming-soon">
-    <h2>Results & Reports</h2>
-    <p>
-      This module is planned for the next development stage.
-    </p>
-  </section>
-)}
-
+        {page === 'Results & Reports' && (
+          <section className="content-card coming-soon">
+            <h2>Results & Reports</h2>
+            <p>
+              This module is planned for the next development stage.
+            </p>
+          </section>
+        )}
       </main>
     </div>
   )
 }
 
+// Google OAuth Provider wrapper
+function App() {
+  return <AppContent />
+}
+
 export default App
+
