@@ -5,7 +5,7 @@ import './Auth.css'
 import Login from './Login'
 import Register from './Register'
 import TestCases from './TestCases'
-import TestExecution from './TestExecution'
+import TestExecution from './components/TestExecution'
 
 const API_URL = 'http://localhost:5000/api'
 
@@ -135,7 +135,9 @@ function PromptManagement({
         </h2>
 
         <p>
-          Create a prompt or use an existing name to add a new version.
+          {selectedPrompt
+            ? 'Add a new version to the selected existing prompt.'
+            : 'Create a completely new prompt. It will start with Version 1.'}
         </p>
 
         <form onSubmit={createPrompt}>
@@ -147,6 +149,7 @@ function PromptManagement({
             placeholder="Example: Customer Support Bot"
             value={name}
             onChange={(event) => setName(event.target.value)}
+            disabled={!!selectedPrompt}
             required
           />
 
@@ -171,7 +174,7 @@ function PromptManagement({
                 ? 'Saving...'
                 : selectedPrompt
                   ? 'Save New Version'
-                  : 'Save Prompt'}
+                  : 'Create New Prompt'}
             </button>
 
             <button
@@ -180,7 +183,7 @@ function PromptManagement({
               onClick={resetForm}
               disabled={isSaving}
             >
-              Clear
+              {selectedPrompt ? 'Cancel Version' : 'Clear'}
             </button>
           </div>
         </form>
@@ -221,6 +224,7 @@ function PromptManagement({
                 <div className="prompt-heading">
                   <div>
                     <h3>{prompt.name}</h3>
+
                     <span className="version-badge">
                       {prompt.versions.length} version(s)
                     </span>
@@ -247,11 +251,13 @@ function PromptManagement({
                 {prompt.versions.map((version) => (
                   <div
                     className="version-item"
-                    key={version.version}
+                    key={version.id}
                   >
                     <h4>Version {version.version}</h4>
                     <p>{version.content}</p>
-                    <small>Created: {version.createdAt}</small>
+                    <small>
+                      Created: {version.createdAt}
+                    </small>
                   </div>
                 ))}
               </article>
@@ -464,18 +470,16 @@ function AppContent() {
 
   // Total number of prompt versions
   const totalVersions = prompts.reduce(
-    (total, prompt) => total + prompt.versions.length,
+    (total, prompt) => total + (prompt.versions?.length || 0),
     0
   )
 
-  // Create a prompt or add a new version through the API
+  // Create a new prompt OR add a version to an explicitly selected prompt
   async function createPrompt(event) {
     event.preventDefault()
 
     if (!name.trim() || !content.trim()) {
-      setMessage(
-        'Please enter both prompt name and instructions.'
-      )
+      setMessage('Please enter both prompt name and instructions.')
       return
     }
 
@@ -483,21 +487,17 @@ function AppContent() {
     setMessage('')
 
     try {
-      const existingPrompt = prompts.find(
-        (prompt) =>
-          prompt.name.toLowerCase() === name.trim().toLowerCase()
-      )
-
-      let response
-
       const headers = {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${auth.token}`,
       }
 
-      if (existingPrompt) {
+      let response
+
+      if (selectedPrompt !== null) {
+        // Add a version to the selected existing prompt
         response = await fetch(
-          `${API_URL}/prompts/${existingPrompt.id}/versions`,
+          `${API_URL}/prompts/${selectedPrompt}/versions`,
           {
             method: 'POST',
             headers,
@@ -507,6 +507,7 @@ function AppContent() {
           }
         )
       } else {
+        // Always create a new prompt with Version 1
         response = await fetch(`${API_URL}/prompts`, {
           method: 'POST',
           headers,
@@ -525,17 +526,23 @@ function AppContent() {
 
       await fetchPrompts()
 
-      setMessage(
-        existingPrompt
-          ? 'New prompt version saved successfully!'
-          : 'Prompt created successfully!'
-      )
+      if (selectedPrompt !== null) {
+        setMessage(
+          `Version ${data.version.version_number} added successfully to "${name}".`
+        )
+      } else {
+        setMessage(
+          'New prompt created successfully with Version 1!'
+        )
+      }
 
       setName('')
       setContent('')
       setSelectedPrompt(null)
+
     } catch (error) {
       console.error('Save prompt error:', error)
+
       setMessage(
         error.message || 'Failed to save prompt. Please try again.'
       )
@@ -544,17 +551,20 @@ function AppContent() {
     }
   }
 
-  // Load a previous prompt into the editor
+  // Select an existing prompt to add a new version
   function loadPrompt(prompt) {
-    setName(prompt.name)
-    setContent(
-      prompt.versions[prompt.versions.length - 1].content
-    )
     setSelectedPrompt(prompt.id)
+    setName(prompt.name)
+    setContent('')
+
     setMessage(
-      'Edit the content and save to create a new version.'
+      `Creating a new version of "${prompt.name}".`
     )
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth',
+    })
   }
 
   // Delete a prompt from PostgreSQL
@@ -594,7 +604,7 @@ function AppContent() {
     }
   }
 
-  // Reset form
+  // Reset form and return to new-prompt mode
   function resetForm() {
     setName('')
     setContent('')
@@ -641,7 +651,7 @@ function AppContent() {
               {item === 'Prompt Management' && '✎'}
               {item === 'Test Cases' && '☷'}
               {item === 'Test Execution' && '▶'}
-              {item === 'Results & Reports' && '▥'}
+              {item === 'Results & Reports' && '◥'}
               <span>{item}</span>
             </button>
           ))}
@@ -743,4 +753,3 @@ function App() {
 }
 
 export default App
-
